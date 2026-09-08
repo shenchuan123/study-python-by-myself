@@ -1,0 +1,172 @@
+﻿diff --git a/packages/client/ui-conversation/src/client/chat/AssistantMarkdown.module.css b/packages/client/ui-conversation/src/client/chat/AssistantMarkdown.module.css
+index c9e8d19d77..682dcc551c 100644
+--- a/packages/client/ui-conversation/src/client/chat/AssistantMarkdown.module.css
++++ b/packages/client/ui-conversation/src/client/chat/AssistantMarkdown.module.css
+@@ -4,10 +4,16 @@
+    stays fixed when the body is a single block. */
+ 
+ .root {
++  /* Conversation body text is resizable: the default (16px / 28px) matches
++     the previous fixed rhythm until a font-size control sets the variable.
++     MarkdownText pins its prose size to --dsw-font-markdown-base (it does not
++     inherit), so this scope re-derives that token from the same variable to
++     keep assistant prose scaling with the control. */
++  --dsw-font-markdown-base: var(--ds-conv-font-size, 16px) / calc(var(--ds-conv-font-size, 16px) + 12px) var(--dsw-font-family);
+   display: flex;
+   flex-direction: column;
+-  font-size: 16px;
+-  line-height: 28px;
++  font-size: var(--ds-conv-font-size, 16px);
++  line-height: calc(var(--ds-conv-font-size, 16px) + 12px);
+   color: var(--dsw-alias-label-primary);
+ }
+ 
+diff --git a/packages/client/ui-conversation/src/client/chat/MessageItem.module.css b/packages/client/ui-conversation/src/client/chat/MessageItem.module.css
+index 54e5f6f98d..cb233127fa 100644
+--- a/packages/client/ui-conversation/src/client/chat/MessageItem.module.css
++++ b/packages/client/ui-conversation/src/client/chat/MessageItem.module.css
+@@ -23,8 +23,8 @@
+   border-radius: 22px;
+   /* 44px single-line bubble: 24 line + 10 vertical padding each side. */
+   padding: 10px 16px;
+-  font-size: 16px;
+-  line-height: 24px;
++  font-size: var(--ds-conv-font-size, 16px);
++  line-height: calc(var(--ds-conv-font-size, 16px) + 8px);
+   color: var(--dsw-alias-label-primary);
+ }
+ 
+diff --git a/packages/client/ui-sidebar/src/client/SidebarRoot.module.css b/packages/client/ui-sidebar/src/client/SidebarRoot.module.css
+index c52291bf75..b673e777a9 100644
+--- a/packages/client/ui-sidebar/src/client/SidebarRoot.module.css
++++ b/packages/client/ui-sidebar/src/client/SidebarRoot.module.css
+@@ -326,6 +326,42 @@
+   width: auto;
+ }
+ 
++/* Conversation font-size slider pinned at the foot of the expanded column. */
++.fontControl {
++  flex: none;
++  box-sizing: border-box;
++  width: 100%;
++  display: flex;
++  align-items: center;
++  gap: 6px;
++  padding: 4px 12px 10px;
++  color: var(--dsw-alias-label-secondary);
++}
++
++.fontGlyph {
++  flex: none;
++  width: 18px;
++  text-align: center;
++  font-weight: 600;
++  color: var(--dsw-alias-label-tertiary);
++}
++
++.fontSlider {
++  flex: 1 1 auto;
++  min-width: 0;
++  accent-color: var(--dsw-static-deepseek-500);
++  cursor: pointer;
++}
++
++.fontValue {
++  flex: none;
++  min-width: 30px;
++  text-align: right;
++  font-variant-numeric: tabular-nums;
++  font-size: 12px;
++  color: var(--dsw-alias-label-secondary);
++}
++
+ @media (prefers-reduced-motion: reduce) {
+   .wide,
+   .fading > *,
+diff --git a/packages/client/ui-sidebar/src/client/SidebarRoot.tsx b/packages/client/ui-sidebar/src/client/SidebarRoot.tsx
+index a7ef74eaa6..5dcb315f61 100644
+--- a/packages/client/ui-sidebar/src/client/SidebarRoot.tsx
++++ b/packages/client/ui-sidebar/src/client/SidebarRoot.tsx
+@@ -34,6 +34,41 @@ const COLLAPSE_SETTLE_MS = 150
+  */
+ const SCROLLBAR_LINGER_MS = 2000
+ 
++/* Conversation body-text size (left sidebar foot). The assistant and user
++   message CSS in ui-conversation read --ds-conv-font-size with a 16px
++   fallback; this slider publishes it on the document root and persists per
++   browser, so the control can live anywhere and still resize the transcript. */
++const CONV_FONT_MIN = 12
++const CONV_FONT_MAX = 28
++const CONV_FONT_STEP = 1
++const CONV_FONT_DEFAULT = 16
++const CONV_FONT_STORAGE_KEY = 'ds.convFontSize'
++
++function readConvFontSize(): number {
++  if (typeof localStorage === 'undefined') return CONV_FONT_DEFAULT
++  try {
++    const value = Number(localStorage.getItem(CONV_FONT_STORAGE_KEY))
++    if (Number.isFinite(value) && value >= CONV_FONT_MIN && value <= CONV_FONT_MAX) return value
++    return CONV_FONT_DEFAULT
++  } catch {
++    /* v8 ignore next -- storage unavailable is non-fatal; fall back to default. */
++    return CONV_FONT_DEFAULT
++  }
++}
++
++function writeConvFontSize(size: number): void {
++  try {
++    localStorage.setItem(CONV_FONT_STORAGE_KEY, String(size))
++  } catch {
++    /* v8 ignore next -- storage unavailable is non-fatal; nothing to persist. */
++  }
++}
++
++function publishConvFontSize(size: number): void {
++  if (typeof document === 'undefined') return
++  document.documentElement.style.setProperty('--ds-conv-font-size', `${size}px`)
++}
++
+ /**
+  * Render the sidebar column shell.
+  * @param props - composed slot props (runtime share + injected callbacks, contract/slots.ts).
+@@ -57,6 +92,11 @@ export function SidebarRoot({
+   }, [collapsed])
+   const wide = !collapsed || !settled
+ 
++  // Conversation font size: republish the stored value on mount so the CSS
++  // variable is in place even when no later slider change happens.
++  const [convFontSize, setConvFontSize] = useState<number>(readConvFontSize)
++  useEffect(() => { publishConvFontSize(convFontSize) }, [convFontSize])
++
+   // Freeze the content at its expanded width while it fades out (collapsed
+   // && wide): the sliding column then clips it instead of reflowing it. The
+   // rail layout (.collapsed styles) only applies once the fade settles.
+@@ -204,6 +244,28 @@ export function SidebarRoot({
+         <div className={css.settingsArea}>
+           {renderSlot('sidebar.settings', { wide })}
+         </div>
++        {/* Conversation font-size slider at the very foot of the expanded
++            column; hidden on the collapsed rail, which has no width for it. */}
++        {wide && (
++          <label className={css.fontControl}>
++            <span className={css.fontGlyph} aria-hidden="true">Aa</span>
++            <input
++              type="range"
++              className={css.fontSlider}
++              min={CONV_FONT_MIN}
++              max={CONV_FONT_MAX}
++              step={CONV_FONT_STEP}
++              value={convFontSize}
++              aria-label="对话正文字号"
++              onChange={(event) => {
++                const next = Number(event.target.value)
++                writeConvFontSize(next)
++                setConvFontSize(next)
++              }}
++            />
++            <span className={css.fontValue}>{convFontSize}px</span>
++          </label>
++        )}
+       </div>
+     </div>
+   )
